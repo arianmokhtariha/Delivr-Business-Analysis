@@ -3042,6 +3042,527 @@ def pareto_plot(
     return fig
 
 
+def bar_plot(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    group_col: Optional[str] = None,
+    max_groups: int = 8,
+    sort_by: Literal["x", "y", "none"] = "none",
+    ascending: bool = False,
+    top_n: Optional[int] = None,
+    orientation: Literal["vertical", "horizontal"] = "vertical",
+    show_values: bool = True,
+    value_format: str = ".3g",
+    text_position: Literal["outside", "inside", "auto"] = "outside",
+    show_pct_of_total: bool = False,
+    color_by_value: bool = False,
+    colorscale: Union[str, List] = "Viridis",
+    single_color: Optional[str] = None,
+    avg_line: bool = False,
+    bargap: float = 0.15,
+    bargroupgap: float = 0.1,
+    title: str = "",
+    width: int = 1400,
+    height: Optional[int] = None,
+) -> go.Figure:
+    """
+    Plain bar chart of an already-aggregated column, with sorting and grouping.
+
+    Unlike ``grouped_bar_plot``, this trusts ``y`` as-is — it never computes a
+    mean/median or a confidence interval, it only draws the values it is given.
+    ``group_col`` clusters bars the same way ``grouped_bar_plot``'s ``split_col``
+    does (one sub-bar per group, sharing the x-category slot), but with no CI
+    since there is nothing here to bootstrap over a single scalar.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe. Must already hold one row per ``x`` (and per
+        ``group_col`` level, when grouped) — duplicates raise rather than being
+        silently summed.
+    x : str
+        Categorical column for the bar positions.
+    y : str
+        Numeric column plotted as bar height.
+    group_col : str, optional
+        Categorical column that splits each ``x`` position into clustered
+        sub-bars, one per level, colour-coded with a legend.
+    max_groups : int, default 8
+        Raises if ``group_col`` has more levels than this — pre-filter first.
+    sort_by : {'x', 'y', 'none'}, default 'none'
+        ``'x'`` sorts categories by their own value; ``'y'`` sorts by the bar
+        value (grouped: by the *sum* across that category's sub-bars, so
+        cluster order stays stable); ``'none'`` keeps the order categories
+        first appear in ``df``.
+    ascending : bool, default False
+        Sort direction for ``sort_by`` in {'x', 'y'}.
+    top_n : int, optional
+        Keep only the top N x-categories after sorting.
+    orientation : {'vertical', 'horizontal'}, default 'vertical'
+        'horizontal' puts categories on the y-axis (good for long labels).
+    show_values : bool, default True
+        Draw the value as text on each bar.
+    value_format : str, default '.3g'
+        Format-spec applied to every displayed/hovered value.
+    text_position : {'outside', 'inside', 'auto'}, default 'outside'
+        Bar text placement, passed straight to Plotly.
+    show_pct_of_total : bool, default False
+        Append each bar's share of the grand total (sum of every displayed
+        bar, across all groups) to its label and hover.
+    color_by_value : bool, default False
+        Colour ungrouped bars by their own magnitude on a continuous
+        ``colorscale`` with a colorbar, instead of the default qualitative
+        per-bar palette. Not compatible with ``group_col`` (raises).
+    colorscale : str or list, default 'Viridis'
+        Colorscale used when ``color_by_value=True``.
+    single_color : str, optional
+        Hex colour to use for every bar instead of the qualitative palette.
+        Ignored when ``group_col`` is set or ``color_by_value=True``.
+    avg_line : bool, default False
+        Draw a dashed gold reference line at the mean of every displayed bar.
+    bargap, bargroupgap : float, default 0.15, 0.1
+        Plotly's gap fractions; ``bargroupgap`` only matters when grouped.
+    title : str, default ""
+        Main title; empty auto-generates ``"y by x"`` (``", split by
+        group_col"`` appended when grouped).
+    width : int, default 1400
+        Figure width in px.
+    height : int, optional
+        Figure height in px; ``None`` defaults to 560 (vertical) or scales with
+        the category count (horizontal).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    needed = [x, y] + ([group_col] if group_col else [])
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"Column(s) not found: {missing}")
+    if not pd.api.types.is_numeric_dtype(df[y]):
+        raise TypeError(
+            f"Column '{y}' must be numeric — bar_plot plots values as-is and "
+            "does not aggregate."
+        )
+    if color_by_value and group_col is not None:
+        raise ValueError("color_by_value is not supported together with group_col — pick one.")
+
+    working = df[needed].dropna(subset=needed)
+    if working.empty:
+        raise ValueError("No rows remain after dropping nulls for the columns.")
+
+    dup_subset = [x] + ([group_col] if group_col else [])
+    if working.duplicated(subset=dup_subset).any():
+        combo = " + ".join(dup_subset)
+        raise ValueError(
+            f"Duplicate rows found for the same {combo} combination. bar_plot "
+            "expects one row per category" + (" per group" if group_col else "") +
+            " — aggregate the dataframe first (e.g. df.groupby([...]).agg(...))."
+        )
+
+    if group_col is not None:
+        n_groups = working[group_col].nunique()
+        if n_groups > max_groups:
+            raise ValueError(
+                f"group_col '{group_col}' has {n_groups} levels (max {max_groups}). "
+                "Pre-filter to the levels you want to compare."
+            )
+
+    # ── Category ordering ──────────────────────────────────────────────────
+    order_series = (
+        working.set_index(x)[y] if group_col is None
+        else working.groupby(x)[y].sum()
+    )
+    n_total_x = len(order_series)
+
+    if sort_by == "y":
+        x_order = order_series.sort_values(ascending=ascending).index.tolist()
+    elif sort_by == "x":
+        try:
+            x_order = sorted(order_series.index.tolist(), reverse=not ascending)
+        except TypeError:
+            x_order = sorted(order_series.index.tolist(), key=str, reverse=not ascending)
+    else:
+        x_order = pd.unique(working[x]).tolist()
+
+    if top_n is not None:
+        x_order = x_order[:top_n]
+    working = working[working[x].isin(set(x_order))]
+    x_labels = [str(v) for v in x_order]
+    is_v = orientation == "vertical"
+
+    def _fmt(val: float) -> str:
+        if pd.isna(val):
+            return ""
+        try:
+            return format(val, value_format)
+        except (ValueError, TypeError):
+            return str(val)
+
+    def _labels(vals: List[float], total: float) -> Tuple[List[str], List[str]]:
+        hover, bar = [], []
+        for v in vals:
+            if pd.isna(v):
+                hover.append("n/a")
+                bar.append("")
+                continue
+            t = _fmt(v)
+            if show_pct_of_total and total:
+                t += f" ({v / total * 100:.1f}%)"
+            hover.append(t)
+            bar.append(t if show_values else "")
+        return hover, bar
+
+    fig = go.Figure()
+    all_vals: List[float] = []
+
+    if group_col is None:
+        series = working.set_index(x)[y]
+        vals = [series.get(cat, np.nan) for cat in x_order]
+        all_vals = [v for v in vals if not pd.isna(v)]
+        hover_txt, bar_txt = _labels(vals, sum(all_vals))
+
+        if color_by_value:
+            marker = dict(
+                color=vals, colorscale=colorscale, showscale=True,
+                colorbar=dict(
+                    title=dict(text=y, font=dict(size=12, color=_FONT_CLR, family="Arial")),
+                    tickfont=dict(color=_FONT_CLR, family="Arial"),
+                    thickness=14, outlinewidth=0,
+                ),
+                line=dict(width=0.4, color="rgba(255,255,255,0.25)"),
+            )
+        elif single_color:
+            marker = dict(color=single_color, line=dict(width=0.4, color="rgba(255,255,255,0.25)"))
+        else:
+            marker = dict(
+                color=[_CATEGORICAL_COLORS[i % len(_CATEGORICAL_COLORS)] for i in range(len(vals))],
+                line=dict(width=0.4, color="rgba(255,255,255,0.25)"),
+            )
+
+        common = dict(
+            text=bar_txt, textposition=text_position, textfont=dict(size=10),
+            cliponaxis=False, marker=marker, showlegend=False, customdata=hover_txt,
+        )
+        if is_v:
+            fig.add_trace(go.Bar(
+                x=x_labels, y=vals,
+                hovertemplate=f"<b>{x}</b>: %{{x}}<br>{y}: %{{customdata}}<extra></extra>",
+                **common,
+            ))
+        else:
+            fig.add_trace(go.Bar(
+                y=x_labels, x=vals, orientation="h",
+                hovertemplate=f"<b>{x}</b>: %{{y}}<br>{y}: %{{customdata}}<extra></extra>",
+                **common,
+            ))
+    else:
+        group_totals = working.groupby(group_col)[y].sum().sort_values(ascending=False)
+        group_levels = group_totals.index.tolist()
+        grand_total = working[y].sum()
+
+        for i, level in enumerate(group_levels):
+            sub = working.loc[working[group_col] == level].set_index(x)[y]
+            vals = [sub.get(cat, np.nan) for cat in x_order]
+            all_vals.extend(v for v in vals if not pd.isna(v))
+            hover_txt, bar_txt = _labels(vals, grand_total)
+            color = PALETTE[i % len(PALETTE)]
+
+            common = dict(
+                name=str(level), text=bar_txt, textposition=text_position,
+                textfont=dict(size=10), cliponaxis=False,
+                marker=dict(color=color, line=dict(width=0.4, color="rgba(255,255,255,0.25)")),
+                customdata=hover_txt,
+            )
+            if is_v:
+                fig.add_trace(go.Bar(
+                    x=x_labels, y=vals,
+                    hovertemplate=(f"<b>{x}</b>: %{{x}}<br>{group_col}: {level}"
+                                   f"<br>{y}: %{{customdata}}<extra></extra>"),
+                    **common,
+                ))
+            else:
+                fig.add_trace(go.Bar(
+                    y=x_labels, x=vals, orientation="h",
+                    hovertemplate=(f"<b>{x}</b>: %{{y}}<br>{group_col}: {level}"
+                                   f"<br>{y}: %{{customdata}}<extra></extra>"),
+                    **common,
+                ))
+
+    avg_val = float(np.mean(all_vals)) if (avg_line and all_vals) else None
+    if avg_val is not None:
+        line_kw = dict(
+            line=dict(color="#FFD700", width=2, dash="dash"),
+            annotation_text=f"Avg: {_fmt(avg_val)}",
+            annotation_font=dict(size=11, color="#FFD700"),
+        )
+        if is_v:
+            fig.add_hline(y=avg_val, annotation_position="top left", **line_kw)
+        else:
+            fig.add_vline(x=avg_val, annotation_position="top", **line_kw)
+
+    n_cats = len(x_order)
+    if height is not None:
+        final_h = height
+    elif is_v:
+        final_h = 560
+    else:
+        final_h = max(400, 40 * n_cats + 160)
+
+    grid = dict(showgrid=True, gridwidth=0.5, gridcolor=_GRID_CLR)
+    if is_v:
+        fig.update_layout(
+            xaxis=dict(title=dict(text=x, font=dict(size=13)),
+                       tickfont=dict(size=11), tickangle=-35),
+            yaxis=dict(title=dict(text=y, font=dict(size=13)), **grid),
+        )
+        margin = dict(l=90, r=70, t=110, b=110)
+    else:
+        fig.update_layout(
+            yaxis=dict(title=dict(text=x, font=dict(size=13)),
+                       tickfont=dict(size=11), autorange="reversed"),
+            xaxis=dict(title=dict(text=y, font=dict(size=13)), **grid),
+        )
+        margin = dict(l=160, r=90, t=110, b=70)
+
+    plot_title = title or (f"{y} by {x}" + (f", split by {group_col}" if group_col else ""))
+    subtitle_parts = []
+    if group_col:
+        subtitle_parts.append(f"grouped by {group_col}")
+    if sort_by != "none":
+        subtitle_parts.append(f"sorted by {sort_by} ({'asc' if ascending else 'desc'})")
+    if top_n is not None and top_n < n_total_x:
+        subtitle_parts.append(f"top {top_n} of {n_total_x} shown")
+    if avg_val is not None:
+        subtitle_parts.append(f"dashed line = average ({_fmt(avg_val)})")
+    subtitle = "  ·  ".join(subtitle_parts)
+
+    fig.update_layout(
+        width=width, height=final_h,
+        barmode="group" if group_col else "relative",
+        bargap=bargap, bargroupgap=bargroupgap if group_col else 0.0,
+        showlegend=group_col is not None,
+        uniformtext_minsize=8, uniformtext_mode="show",
+        legend=dict(title=dict(text=group_col or ""),
+                    bgcolor="rgba(0,0,0,0.4)", bordercolor="rgba(255,255,255,0.15)",
+                    borderwidth=1, font=dict(size=11, color=_FONT_CLR)),
+        margin=margin,
+    )
+    _apply_base_layout(fig, title=plot_title, subtitle=subtitle, width=width, height=final_h)
+    return fig
+
+
+def line_plot(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    group_col: Optional[str] = None,
+    max_groups: int = 8,
+    sort_x: bool = True,
+    show_markers: bool = True,
+    marker_size: int = 6,
+    line_shape: Literal["linear", "spline", "hv", "vh", "hvh", "vhv"] = "linear",
+    line_width: int = 2,
+    opacity: float = 0.9,
+    fill_area: bool = False,
+    connect_gaps: bool = False,
+    rolling: Optional[int] = None,
+    avg_line: bool = False,
+    annotate_extremes: bool = False,
+    value_format: str = ".3g",
+    log_x: bool = False,
+    log_y: bool = False,
+    title: str = "",
+    width: int = 1400,
+    height: Optional[int] = None,
+) -> go.Figure:
+    """
+    Plain line chart connecting (x, y) points as given, with optional grouping.
+
+    Draws exactly the rows it is handed — no resampling or aggregation (see
+    ``time_series_plot`` for the calendar-aware version). ``group_col`` overlays
+    one coloured line per level on the same axes, the natural way to compare
+    several series' shape and level at a glance.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe.
+    x : str
+        Column for the x-axis (numeric, datetime or categorical).
+    y : str
+        Numeric column for the y-axis.
+    group_col : str, optional
+        Categorical column → one line per level, colour-coded with a legend.
+    max_groups : int, default 8
+        Raises if ``group_col`` has more levels than this — pre-filter first.
+    sort_x : bool, default True
+        Sort each series by ``x`` before drawing, so the line doesn't zig-zag
+        on unsorted input. Disable only if the row order itself is meaningful.
+    show_markers : bool, default True
+        Draw a point marker at every observation, not just the connecting line.
+    marker_size : int, default 6
+        Marker size in px (ignored if ``show_markers=False``).
+    line_shape : {'linear', 'spline', 'hv', 'vh', 'hvh', 'vhv'}, default 'linear'
+        Plotly line interpolation between points.
+    line_width : int, default 2
+        Line width in px.
+    opacity : float, default 0.9
+        Line/marker opacity.
+    fill_area : bool, default False
+        Shade the area under each line down to zero, at low opacity.
+    connect_gaps : bool, default False
+        Whether a line skips over missing (NaN) y-values or leaves a gap.
+    rolling : int, optional
+        Overlay a trailing rolling mean over this many points
+        (``min_periods=1``); the raw line fades and only the rolling trace is
+        named in the legend — mirrors ``time_series_plot``'s treatment.
+    avg_line : bool, default False
+        Draw a dashed gold reference line at the mean of every plotted point
+        (all series combined).
+    annotate_extremes : bool, default False
+        Label each series' single highest and lowest point.
+    value_format : str, default '.3g'
+        Format-spec used for hover values and the avg-line/extremes labels.
+    log_x, log_y : bool, default False
+        Log-scale the axes.
+    title : str, default ""
+        Main title; empty auto-generates ``"y over x"`` (``", by group_col"``
+        appended when grouped).
+    width : int, default 1400
+        Figure width in px.
+    height : int, optional
+        Figure height in px; ``None`` defaults to 620.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    needed = [x, y] + ([group_col] if group_col else [])
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"Column(s) not found: {missing}")
+    if not pd.api.types.is_numeric_dtype(df[y]):
+        raise TypeError(f"Column '{y}' must be numeric.")
+
+    working = df[needed].dropna(subset=needed)
+    if working.empty:
+        raise ValueError("No rows remain after dropping nulls for the columns.")
+    if sort_x:
+        working = working.sort_values(by=x, kind="stable")
+
+    if group_col is not None:
+        counts = working[group_col].value_counts()
+        if len(counts) > max_groups:
+            raise ValueError(
+                f"group_col '{group_col}' has {len(counts)} levels (max {max_groups}). "
+                "Pre-filter to the levels you want to compare."
+            )
+        group_levels = counts.index.tolist()
+    else:
+        group_levels = None
+
+    def _fmt(val: float) -> str:
+        try:
+            return format(val, value_format)
+        except (ValueError, TypeError):
+            return str(val)
+
+    fig = go.Figure()
+    series_points: List[Tuple[str, np.ndarray, np.ndarray]] = []
+
+    def _add_series(xv: np.ndarray, yv: np.ndarray, name: str, color: str) -> None:
+        mode = "lines+markers" if show_markers else "lines"
+        fill = "tozeroy" if fill_area else None
+        fillcolor = _hex_to_rgba(color, 0.15) if fill_area else None
+        hover = f"%{{y:{value_format}}}<extra></extra>"
+        if rolling is not None:
+            roll = pd.Series(yv).rolling(rolling, min_periods=1).mean().to_numpy()
+            fig.add_trace(go.Scatter(
+                x=xv, y=yv, mode=mode, name=name, showlegend=False,
+                line=dict(color=color, width=1, shape=line_shape),
+                marker=dict(size=marker_size, color=color) if show_markers else None,
+                opacity=0.3, connectgaps=connect_gaps, hovertemplate=hover,
+            ))
+            fig.add_trace(go.Scatter(
+                x=xv, y=roll, mode=mode, name=f"{name} ({rolling}-pt roll)",
+                line=dict(color=color, width=line_width + 1, shape=line_shape),
+                marker=dict(size=marker_size, color=color) if show_markers else None,
+                opacity=opacity, connectgaps=connect_gaps, fill=fill, fillcolor=fillcolor,
+                hovertemplate=hover,
+            ))
+        else:
+            fig.add_trace(go.Scatter(
+                x=xv, y=yv, mode=mode, name=name, showlegend=group_col is not None,
+                line=dict(color=color, width=line_width, shape=line_shape),
+                marker=dict(size=marker_size, color=color,
+                            line=dict(width=0.6, color="rgba(255,255,255,0.4)")) if show_markers else None,
+                opacity=opacity, connectgaps=connect_gaps, fill=fill, fillcolor=fillcolor,
+                hovertemplate=hover,
+            ))
+        series_points.append((name, xv, yv))
+
+    if group_col is None:
+        _add_series(working[x].to_numpy(), working[y].to_numpy(dtype=float), y, PALETTE[0])
+    else:
+        for i, level in enumerate(group_levels):
+            sub = working[working[group_col] == level]
+            _add_series(sub[x].to_numpy(), sub[y].to_numpy(dtype=float),
+                       str(level), PALETTE[i % len(PALETTE)])
+
+    if annotate_extremes:
+        for name, xv, yv in series_points:
+            if len(yv) == 0:
+                continue
+            i_max, i_min = int(np.argmax(yv)), int(np.argmin(yv))
+            for i_pt, tag, clr, dy in ((i_max, "Max", "#00CC96", -30), (i_min, "Min", "#EF553B", 30)):
+                fig.add_annotation(
+                    x=xv[i_pt], y=yv[i_pt], text=f"{tag}: {_fmt(yv[i_pt])}",
+                    showarrow=True, arrowhead=2, arrowsize=0.8, arrowcolor=clr,
+                    ax=0, ay=dy, font=dict(size=10, color=clr),
+                    bgcolor="rgba(0,0,0,0.6)", bordercolor=clr, borderwidth=1, borderpad=3,
+                )
+
+    all_y = np.concatenate([yv for _, _, yv in series_points]) if series_points else np.array([])
+    avg_val = float(np.nanmean(all_y)) if (avg_line and all_y.size) else None
+    if avg_val is not None:
+        fig.add_hline(
+            y=avg_val, line=dict(color="#FFD700", width=2, dash="dash"),
+            annotation_text=f"Avg: {_fmt(avg_val)}", annotation_position="top left",
+            annotation_font=dict(size=11, color="#FFD700"),
+        )
+
+    final_h = height if height is not None else 620
+    plot_title = title or (f"{y} over {x}" + (f", by {group_col}" if group_col else ""))
+    subtitle_parts = []
+    if group_col:
+        subtitle_parts.append(f"grouped by {group_col}")
+    if rolling is not None:
+        subtitle_parts.append(f"{rolling}-point rolling mean overlaid")
+    if avg_val is not None:
+        subtitle_parts.append(f"dashed line = average ({_fmt(avg_val)})")
+    subtitle = "  ·  ".join(subtitle_parts)
+
+    fig.update_layout(
+        width=width, height=final_h,
+        hovermode="x unified",
+        showlegend=(group_col is not None) or (rolling is not None),
+        xaxis=dict(title=dict(text=x, font=dict(size=13)),
+                   type="log" if log_x else "linear",
+                   showgrid=True, gridwidth=0.5, gridcolor=_GRID_CLR, zeroline=False),
+        yaxis=dict(title=dict(text=y, font=dict(size=13)),
+                   type="log" if log_y else "linear",
+                   showgrid=True, gridwidth=0.5, gridcolor=_GRID_CLR, zeroline=False),
+        legend=dict(title=dict(text=group_col or ""),
+                    bgcolor="rgba(0,0,0,0.4)", bordercolor="rgba(255,255,255,0.15)",
+                    borderwidth=1, font=dict(size=11, color=_FONT_CLR)),
+        margin=dict(l=80, r=60, t=100, b=70),
+    )
+    _apply_base_layout(fig, title=plot_title, subtitle=subtitle, width=width, height=final_h)
+    return fig
+
+
 # ── Model diagnostics ────────────────────────────────────────────────────────
 # The plots below read model *output* — predictions, scores, importances — not a
 # source DataFrame, so they take arrays rather than ``df, col``. None of them
