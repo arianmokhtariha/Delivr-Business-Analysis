@@ -3382,15 +3382,17 @@ def line_plot(
 
     Draws exactly the rows it is handed — no resampling or aggregation (see
     ``time_series_plot`` for the calendar-aware version). ``group_col`` overlays
-    one coloured line per level on the same axes, the natural way to compare
-    several series' shape and level at a glance.
+    one coloured line per level on the same axes. The x-axis type (date /
+    linear / category) is auto-detected from ``x``'s dtype; ``Period`` columns
+    (e.g. ``df['date'].dt.to_period('M')``) are converted to timestamps first,
+    since Plotly cannot serialise ``Period`` objects directly.
 
     Parameters
     ----------
     df : pd.DataFrame
         Input dataframe.
     x : str
-        Column for the x-axis (numeric, datetime or categorical).
+        Column for the x-axis (numeric, datetime, Period, or categorical).
     y : str
         Numeric column for the y-axis.
     group_col : str, optional
@@ -3417,7 +3419,7 @@ def line_plot(
     rolling : int, optional
         Overlay a trailing rolling mean over this many points
         (``min_periods=1``); the raw line fades and only the rolling trace is
-        named in the legend — mirrors ``time_series_plot``'s treatment.
+        named in the legend.
     avg_line : bool, default False
         Draw a dashed gold reference line at the mean of every plotted point
         (all series combined).
@@ -3426,7 +3428,8 @@ def line_plot(
     value_format : str, default '.3g'
         Format-spec used for hover values and the avg-line/extremes labels.
     log_x, log_y : bool, default False
-        Log-scale the axes.
+        Log-scale the axes. ``log_x`` requires a numeric ``x`` (raises
+        otherwise — a date or category axis can't be log-scaled).
     title : str, default ""
         Main title; empty auto-generates ``"y over x"`` (``", by group_col"``
         appended when grouped).
@@ -3446,11 +3449,33 @@ def line_plot(
     if not pd.api.types.is_numeric_dtype(df[y]):
         raise TypeError(f"Column '{y}' must be numeric.")
 
-    working = df[needed].dropna(subset=needed)
+    working = df[needed].copy()
+
+    # Period dtype (e.g. df['date'].dt.to_period('M')) isn't serialisable by
+    # Plotly — convert to real timestamps so it renders as a proper date axis.
+    if isinstance(working[x].dtype, pd.PeriodDtype):
+        working[x] = working[x].dt.to_timestamp()
+
+    working = working.dropna(subset=needed)
     if working.empty:
         raise ValueError("No rows remain after dropping nulls for the columns.")
     if sort_x:
         working = working.sort_values(by=x, kind="stable")
+
+    is_datetime_x = pd.api.types.is_datetime64_any_dtype(working[x])
+    is_numeric_x = pd.api.types.is_numeric_dtype(working[x])
+    if log_x and not is_numeric_x:
+        raise ValueError(
+            f"log_x requires a numeric x column; '{x}' is {working[x].dtype}."
+        )
+    # Auto-detect instead of forcing "linear" — that was the bug: it broke
+    # datetime/category x-axes, silently dropping the trace.
+    x_axis_type = (
+        "log" if log_x
+        else "date" if is_datetime_x
+        else "linear" if is_numeric_x
+        else "category"
+    )
 
     if group_col is not None:
         counts = working[group_col].value_counts()
@@ -3549,7 +3574,7 @@ def line_plot(
         hovermode="x unified",
         showlegend=(group_col is not None) or (rolling is not None),
         xaxis=dict(title=dict(text=x, font=dict(size=13)),
-                   type="log" if log_x else "linear",
+                   type=x_axis_type,
                    showgrid=True, gridwidth=0.5, gridcolor=_GRID_CLR, zeroline=False),
         yaxis=dict(title=dict(text=y, font=dict(size=13)),
                    type="log" if log_y else "linear",
