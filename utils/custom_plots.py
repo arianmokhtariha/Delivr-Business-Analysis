@@ -3369,6 +3369,8 @@ def line_plot(
     connect_gaps: bool = False,
     rolling: Optional[int] = None,
     avg_line: bool = False,
+    avg_line_mode: Literal["group_mean", "pooled"] = "group_mean",
+    avg_group_line: bool = False,
     annotate_extremes: bool = False,
     value_format: str = ".3g",
     log_x: bool = False,
@@ -3386,6 +3388,9 @@ def line_plot(
     linear / category) is auto-detected from ``x``'s dtype; ``Period`` columns
     (e.g. ``df['date'].dt.to_period('M')``) are converted to timestamps first,
     since Plotly cannot serialise ``Period`` objects directly.
+
+    Exactly one y-value per x is required (per group, when grouped) — like
+    ``bar_plot``, this function never aggregates; duplicates raise.
 
     Parameters
     ----------
@@ -3421,8 +3426,24 @@ def line_plot(
         (``min_periods=1``); the raw line fades and only the rolling trace is
         named in the legend.
     avg_line : bool, default False
-        Draw a dashed gold reference line at the mean of every plotted point
-        (all series combined).
+        Draw a dashed gold **horizontal** reference line at a single average
+        value. Works with or without ``group_col`` — with no grouping there is
+        only one series, so ``avg_line_mode`` has no effect.
+    avg_line_mode : {'group_mean', 'pooled'}, default 'group_mean'
+        How the single ``avg_line`` value is computed when ``group_col`` is
+        set. ``'group_mean'`` averages each group's own mean, so every group
+        counts equally regardless of how many x-points it has (a group with
+        more rows does not pull the line toward itself) — this is the default.
+        ``'pooled'`` averages every individual y-value across all groups, so a
+        group with more rows/x-points does dominate.
+    avg_group_line : bool, default False
+        Draw a distinct **trend** line — not a flat average — through
+        ``groupby(x)[y].mean()``: at each x, the mean of whatever groups
+        actually have data there. This is a synthetic "average group", so it's
+        rendered in solid white with diamond markers and a heavier dash to
+        stay visually distinct from the real group lines. Requires
+        ``group_col`` (raises otherwise — a single line has no group average
+        to speak of).
     annotate_extremes : bool, default False
         Label each series' single highest and lowest point.
     value_format : str, default '.3g'
@@ -3448,6 +3469,11 @@ def line_plot(
         raise ValueError(f"Column(s) not found: {missing}")
     if not pd.api.types.is_numeric_dtype(df[y]):
         raise TypeError(f"Column '{y}' must be numeric.")
+    if avg_group_line and group_col is None:
+        raise ValueError(
+            "avg_group_line requires group_col to be set — it has no meaning "
+            "for a single line."
+        )
 
     working = df[needed].copy()
 
@@ -3459,6 +3485,16 @@ def line_plot(
     working = working.dropna(subset=needed)
     if working.empty:
         raise ValueError("No rows remain after dropping nulls for the columns.")
+
+    dup_subset = [x] if group_col is None else [x, group_col]
+    if working.duplicated(subset=dup_subset).any():
+        combo = " + ".join(dup_subset)
+        raise ValueError(
+            f"Duplicate rows found for the same {combo} combination. line_plot "
+            "expects exactly one y value per x" + (" per group" if group_col else "") +
+            " — aggregate the dataframe first (e.g. df.groupby([...]).agg(...))."
+        )
+
     if sort_x:
         working = working.sort_values(by=x, kind="stable")
 
@@ -3468,8 +3504,6 @@ def line_plot(
         raise ValueError(
             f"log_x requires a numeric x column; '{x}' is {working[x].dtype}."
         )
-    # Auto-detect instead of forcing "linear" — that was the bug: it broke
-    # datetime/category x-axes, silently dropping the trace.
     x_axis_type = (
         "log" if log_x
         else "date" if is_datetime_x
@@ -3536,6 +3570,25 @@ def line_plot(
             _add_series(sub[x].to_numpy(), sub[y].to_numpy(dtype=float),
                        str(level), PALETTE[i % len(PALETTE)])
 
+    if avg_group_line:
+        grp_avg = working.groupby(x)[y].mean()
+        if sort_x:
+            try:
+                grp_avg = grp_avg.sort_index()
+            except TypeError:
+                grp_avg = grp_avg.loc[sorted(grp_avg.index, key=str)]
+        else:
+            grp_avg = grp_avg.reindex(pd.unique(working[x]))
+        fig.add_trace(go.Scatter(
+            x=grp_avg.index.to_numpy(), y=grp_avg.to_numpy(dtype=float),
+            mode="lines+markers", name="Group Average (per x)",
+            line=dict(color="#FFFFFF", width=line_width + 2, dash="longdash", shape=line_shape),
+            marker=dict(size=marker_size + 2, symbol="diamond", color="#FFFFFF",
+                        line=dict(width=1, color="rgba(0,0,0,0.6)")),
+            opacity=1.0, connectgaps=connect_gaps,
+            hovertemplate=f"Group avg: %{{y:{value_format}}}<extra></extra>",
+        ))
+
     if annotate_extremes:
         for name, xv, yv in series_points:
             if len(yv) == 0:
@@ -3549,8 +3602,16 @@ def line_plot(
                     bgcolor="rgba(0,0,0,0.6)", bordercolor=clr, borderwidth=1, borderpad=3,
                 )
 
-    all_y = np.concatenate([yv for _, _, yv in series_points]) if series_points else np.array([])
-    avg_val = float(np.nanmean(all_y)) if (avg_line and all_y.size) else None
+    avg_val = None
+    if avg_line:
+        group_means = [float(np.mean(yv)) for _, _, yv in series_points if len(yv) > 0]
+        if avg_line_mode == "pooled":
+            pooled_vals = (np.concatenate([yv for _, _, yv in series_points])
+                          if series_points else np.array([]))
+            avg_val = float(np.nanmean(pooled_vals)) if pooled_vals.size else None
+        else:  # group_mean
+            avg_val = float(np.mean(group_means)) if group_means else None
+
     if avg_val is not None:
         fig.add_hline(
             y=avg_val, line=dict(color="#FFD700", width=2, dash="dash"),
@@ -3566,13 +3627,16 @@ def line_plot(
     if rolling is not None:
         subtitle_parts.append(f"{rolling}-point rolling mean overlaid")
     if avg_val is not None:
-        subtitle_parts.append(f"dashed line = average ({_fmt(avg_val)})")
+        mode_note = f" ({avg_line_mode})" if group_col else ""
+        subtitle_parts.append(f"dashed gold line = average{mode_note} ({_fmt(avg_val)})")
+    if avg_group_line:
+        subtitle_parts.append("white dashed line = per-x group average")
     subtitle = "  ·  ".join(subtitle_parts)
 
     fig.update_layout(
         width=width, height=final_h,
         hovermode="x unified",
-        showlegend=(group_col is not None) or (rolling is not None),
+        showlegend=(group_col is not None) or (rolling is not None) or avg_group_line,
         xaxis=dict(title=dict(text=x, font=dict(size=13)),
                    type=x_axis_type,
                    showgrid=True, gridwidth=0.5, gridcolor=_GRID_CLR, zeroline=False),
