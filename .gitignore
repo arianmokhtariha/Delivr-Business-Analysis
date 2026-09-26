@@ -9,3 +9,5 @@ notes.md
 .mcp.json
 .mcp-kit.json
 .jupyter
+.ipynb_checkpoints
+study_guide.ipynb
