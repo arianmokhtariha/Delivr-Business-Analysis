@@ -2,7 +2,7 @@
 
 # Delivr business analysis
 
-A business report on seven months of orders from a food delivery startup: how it grows, why customers stay, and where the profit really comes from.
+A business report on seven months of orders from a food delivery startup.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
@@ -14,16 +14,16 @@ A business report on seven months of orders from a food delivery startup: how it
 
 </div>
 
-**Delivr** is a fictional food delivery startup. It works with five restaurants ("eateries"), sells their meals in its app, and keeps the difference between the meal price and what the eatery charges. The data covers **June to December 2018**: 1,304 customers and 11,351 orders. Every number below was calculated with SQL in PostgreSQL.
+**Delivr** is a fictional food delivery startup. It works with five restaurants ("eateries"), sells their meals in its app, and keeps the difference between the meal price and what the eatery charges. The data covers June to December 2018, with 1,304 customers and 11,351 orders. I calculated every number below with SQL in PostgreSQL.
 
-## Summary: what we found and what Delivr should do
+## Summary: what I found and what Delivr should do
 
-| | What we found | What Delivr should do |
+| | What I found | What Delivr should do |
 |---|---|---|
-| [1](#1-growth) | More users join every month, but the growth rate fell from **84% to 34%** | Track the growth rate, not only the user count. Plan for slower growth |
-| [2](#2-where-the-revenue-growth-came-from) | Revenue grew 17x. **76%** of the growth came from more users, **23%** from users ordering more often, **1%** from bigger orders | Order size is the unused lever: test meal bundles or a minimum order for free delivery |
+| [1](#1-growth) | More users join every month, but the growth rate fell from **84% to 34%** | Report the growth rate next to the user count, and plan for slower growth |
+| [2](#2-where-the-revenue-growth-came-from) | Revenue grew 17x. **76%** of the growth came from more users, **23%** from users ordering more often, **1%** from bigger orders | Test meal bundles or a minimum order for free delivery to raise the order size |
 | [3](#3-loyalty) | **72%** of December's users were returning customers. Every signup month was still **94%+** active in December | Protect this loyal base (for example with rewards) before spending more on new users |
-| [4](#4-eateries) | Burgatorio brings the most revenue, but Bean Me Up Scotty keeps the most profit (**77%** vs **52%** margin) | Rank and promote eateries and meals by profit, not by revenue |
+| [4](#4-eateries) | Burgatorio brings the most revenue, but Bean Me Up Scotty keeps the most profit (**77%** vs **52%** margin) | Rank and promote eateries and meals by their profit |
 | [4](#4-eateries) | Life of Pie keeps **88%** of each sale, but its customers come back less and spend less | Add meals to its menu (only 2 sell) and promote it |
 | [5](#5-customers) | **61%** of customers are needed to make 80% of the profit. No small group carries the business | Losing any single customer is low risk. Broad offers fit better than VIP programs |
 | [6](#6-timing) | **Half** of all new users place their first order in the first 7 days of a month | Time campaigns and eatery capacity for the first week of each month |
@@ -52,7 +52,7 @@ A business report on seven months of orders from a food delivery startup: how it
 
 - **MAU** (monthly active users) grew from 123 in June to 1,267 in December.
 - Each month adds more users than the month before: +103 in July, +323 in December.
-- But compared with the month before, growth fell from **84% to 34%**. The number of users added keeps rising only because the base keeps getting bigger. Looking at "users added" alone hides this slowdown.
+- But compared with the month before, growth fell from 84% to 34%. The number of users added keeps rising only because the base keeps getting bigger. Looking at "users added" alone hides this slowdown.
 
 <details>
 <summary>Charts from the analysis notebooks (8)</summary>
@@ -71,9 +71,9 @@ Monthly revenue went from \$6.3K in June to \$108.9K in December. Revenue is **a
 <img src="assets/report/02_revenue_waterfall.png" width="100%" alt="Waterfall of revenue growth by driver"/>
 <img src="assets/report/03_per_user_vs_per_order.png" width="100%" alt="ARPU, orders per user, average order value and margin by month"/>
 
-- **More users** added \$78.4K a month (76% of the growth). **More orders per user** added \$23.6K (23%). **Bigger orders** added only \$0.6K (1%).
-- **ARPU** (average revenue per user) rose from \$51 to \$86. This came only from ordering more often: orders per user went from 2.29 to 3.80 (+66%).
-- Average order value (\$22 to \$23) and gross margin (65%) did not change at all. Customers did not buy bigger or more expensive orders. This is the lever Delivr has not used yet.
+- More users added \$78.4K a month (76% of the growth). More orders per user added \$23.6K (23%). Bigger orders added only \$0.6K (1%).
+- **ARPU** (average revenue per user) rose from \$51 to \$86. All of it came from ordering more often. Orders per user went from 2.29 to 3.80 (+66%).
+- Average order value (\$22 to \$23) and gross margin (65%) did not change at all. Customers did not buy bigger or more expensive orders, so order size is the lever Delivr has not used yet.
 
 <details>
 <summary>Charts from the analysis notebooks (8)</summary>
@@ -115,8 +115,8 @@ Monthly revenue went from \$6.3K in June to \$108.9K in December. Revenue is **a
 
 <img src="assets/report/09_life_of_pie.png" width="100%" alt="Life of Pie compared with the other eateries"/>
 
-- **Life of Pie** keeps 88 cents of every dollar, the best on the platform. 86% of all customers tried it at least once.
-- The problem is what happens next: only 2 of its meals sell, its retention is 60% (others: 76% to 83%), and its December customers spent \$10 each there (others: \$20 to \$29). More meals and more visibility would pay off well here.
+- Life of Pie keeps 88 cents of every dollar, the best on the platform, and 86% of all customers tried it at least once.
+- But only 2 of its meals sell, its retention is 60% (others: 76% to 83%), and its December customers spent \$10 each there (others: \$20 to \$29). Each extra dollar of sales there keeps 88 cents, more than at any other eatery.
 
 <details>
 <summary>Charts from the analysis notebooks (10)</summary>
@@ -134,7 +134,7 @@ Monthly revenue went from \$6.3K in June to \$108.9K in December. Revenue is **a
 <img src="assets/report/10_profit_concentration.png" width="100%" alt="Share of profit made by the top share of customers, orders, meals and eateries"/>
 <img src="assets/report/11_profit_per_customer.png" width="100%" alt="Profit per customer by percentile group"/>
 
-- A **Pareto analysis** sorts customers from most to least profit and adds up their share. The famous 80/20 rule says 20% of customers make 80% of the profit. At Delivr it takes **61%** of customers (and 59% of orders) to reach 80%.
+- A **Pareto analysis** sorts customers from most to least profit and adds up their share. The famous 80/20 rule says 20% of customers make 80% of the profit. At Delivr it takes 61% of customers (and 59% of orders) to reach 80%.
 - The typical customer brought in \$122 of profit (the median). Half of all customers are between \$78 and \$172. The top customer brought in \$408, only 0.2% of all profit.
 - Revenue and profit per customer move in an almost perfect straight line, so there are no discount-heavy customers who spend a lot but earn Delivr little.
 
