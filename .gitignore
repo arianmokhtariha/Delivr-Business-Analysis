@@ -2,8 +2,6 @@
 __pycache__ 
 .vscode
 
-sql_archive1.sql
-sql_archive2.sql
 notes.md
 # Claude Code MCP config (contains credentials)
 .mcp.json
